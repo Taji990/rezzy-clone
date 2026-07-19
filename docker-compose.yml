@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: rezzy-traefik
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.filename=/etc/traefik/dynamic/config.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=admin@rezzy.com
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme.json:/acme.json
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - rezzy-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: rezzy-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-rezzy}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-rezzy_secure_password}
+      POSTGRES_DB: ${DB_NAME:-rezzy_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rezzy-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rezzy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: rezzy-api
+    environment:
+      NODE_ENV: production
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DB_USER:-rezzy}
+      DATABASE_PASSWORD: ${DB_PASSWORD:-rezzy_secure_password}
+      DATABASE_NAME: ${DB_NAME:-rezzy_db}
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      JWT_EXPIRY: ${JWT_EXPIRY:-24h}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      API_PORT: 3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rezzy-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)
+      - traefik.http.routers.api.entrypoints=web
+      - traefik.http.services.api.loadbalancer.server.port=3001
+      - traefik.http.middlewares.api-stripprefix.stripprefix.prefixes=/api
+      - traefik.http.routers.api.middlewares=api-stripprefix
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: rezzy-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost/api
+    networks:
+      - rezzy-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`localhost`)
+      - traefik.http.routers.web.entrypoints=web
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  rezzy-network:
+    driver: bridge

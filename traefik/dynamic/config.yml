@@ -1,0 +1,46 @@
+http:
+  middlewares:
+    securityHeaders:
+      headers:
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "geolocation=(), microphone=(), camera=()"
+        sslRedirect: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+    rateLimit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+  routers:
+    api:
+      rule: "PathPrefix(`/api`)"
+      service: api
+      middlewares:
+        - securityHeaders
+        - rateLimit
+      entryPoints:
+        - web
+    web:
+      rule: "PathPrefix(`/`)"
+      service: web
+      middlewares:
+        - securityHeaders
+      entryPoints:
+        - web
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://api:3001"
+    web:
+      loadBalancer:
+        servers:
+          - url: "http://web:3000"
